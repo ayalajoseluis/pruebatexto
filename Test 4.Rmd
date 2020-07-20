@@ -1,0 +1,228 @@
+---
+title: "Test 4"
+output: html_document
+---
+
+Librerías
+
+```{r message=FALSE, warning=FALSE, paged.print=TRUE}
+library(rvest)
+library(tidyverse)
+library(ggplot2)
+library(knitr)
+library(tm)
+library(stringi)
+library(sentiment)
+library(wordcloud)
+library(sentiment)
+library(tm)
+library(quanteda)
+```
+
+
+Leemos la lista inicial de hinchadas argentinas disponibles
+
+```{r}
+#pagina <- read_html("https://barrabrava.net/pais/argentina/")
+
+```
+ 
+Saco las URL de cada una de las barras. Para esto leo los nodos con hipervínculos y saco los que van hacia cada club.
+ 
+```{r}
+#listaurlbarras <- pagina %>% html_nodes("table")%>% html_nodes("tr") %>% html_nodes("a") %>% html_attr("href")
+#listaurlbarras <- listaurlbarras[!str_detect(listaurlbarras, "/club/")]
+```
+
+Leemos y armamos la lista de las URLs con las letras.
+
+```{r}
+# listaurlletras <- list()
+# 
+# for(i in listaurlbarras){
+#   direccion <- paste0("https://barrabrava.net",i,"letras")
+#   pagina <- read_html(direccion)
+#   listaurltmp <- pagina %>% html_nodes("section") %>% html_nodes("a") %>% html_attr("href")
+#   listaurlletras <- c(listaurlletras, listaurltmp)
+# }
+# listaurlletras <- unlist(listaurlletras)
+# listaurlletras <- listaurlletras[!str_detect(listaurlletras, "usuario")]
+```
+
+Con estas URLs armo finalmente la lista de letras.
+
+```{r}
+
+#listaletras <- list()
+#listaletrastmp <- list()
+#for(i in listaurlletras){
+#  direccion <- paste0("https://barrabrava.net",i)
+#  cat("leyendo direccion ", direccion, "\n")
+#  pagina <- read_html(direccion)
+#  listaletrastmp <- pagina %>% html_nodes("p") %>% as.character() %>% str_replace_all("<br>", " ") %>% 
+#  listaletras <- c(listaletras, listaletrastmp[2])
+#}
+
+#listaletras <- unlist(listaletras)
+
+```
+
+Armo el dataframe de letras con los datos de cada una.
+
+```{r}
+# df_letras <- data.frame(listaurlletras)
+# df_letras$listaurlletras <- df_letras$listaurlletras %>% str_replace_all("-", " ")
+# df_letras <- separate(data = df_letras, col = listaurlletras, into = c("uno","club", "barra", "dos", "titulo"), sep = "/")
+# df_letras$uno <- NULL
+# df_letras$dos <- NULL
+# df_letras$letra <- listaletras %>% str_replace_all(","," ") %>% str_replace_all(";"," ") %>% str_replace_all("  "," ") %>% tolower()
+# df_letras <- df_letras %>% filter(letra != "")
+
+```
+
+Como ya lo tenía en un archivo levanto el scrap de ahí.
+
+```{r}
+df_letras <- read.csv("letrasbarras.csv", sep = ";", stringsAsFactors = FALSE)
+```
+
+
+Limpio las letras
+
+
+```{r}
+df_letras$letra_clean <- str_replace_all(df_letras$Letra, "(\\w)(\\1{2,})", "\\1")
+df_letras$letra_clean <- str_replace_all(df_letras$letra_clean, "[^a-z,á,é,í,ó,ú,0-9\\s]", "")
+df_letras$letra_clean <- str_replace_all(df_letras$letra_clean, "  ", " ")
+
+
+
+```
+
+Genero los tokens
+
+```{r}
+
+armar_tokens <- function(string1){
+    temp <- stringr::str_split(string1, " ")
+    temp <- lapply(temp, unique)
+    return(temp)
+}
+
+df_letras$tokens_clean <- armar_tokens(df_letras$letra_clean)
+
+
+```
+
+
+Genero la columna de texto "limpio"
+
+```{r}
+df_letras$text_clean <- ifelse(unlist(lapply(df_letras$tokens_clean, length)) == 0," ", stri_paste_list(df_letras$tokens_clean, sep = " "))
+df_letras$text <- df_letras$text_clean
+```
+
+Armo el corpus y veo que asocia a cada barra. Todavía falta limpiar stopwords pero da una idea de para donde va.
+
+```{r}
+corpusdatos <- corpus(df_letras)
+dfm_datos <- dfm(corpusdatos)
+tokensporbarra <- topfeatures(dfm_datos, 5, groups = "Club")
+tokensporbarra
+```
+
+Armo un corpus limpio
+
+```{r}
+corpus_letras_clean <- Corpus(VectorSource(df_letras$letra_clean))
+corpus_letras_limpio_c2 <- tm_map(corpus_letras_clean, removeNumbers)
+corpus_letras_limpio_c2 <- tm_map(corpus_letras_limpio_c2, removePunctuation)
+corpus_letras_limpio_c2 <- tm_map(corpus_letras_limpio_c2, stripWhitespace)
+corpus_letras_limpio_c2 <- tm_map(corpus_letras_limpio_c2, removeWords, stopwords(language = "es"))
+inspect(corpus_letras_limpio_c2[1:10])
+```
+
+De acá en adelante armo el term document matrix (tdm), el document term matrix (dtm)
+
+```{r}
+tdm_letras_c2 <- TermDocumentMatrix(corpus_letras_limpio_c2, control = list(stopwords = FALSE))
+tdm_letras_c2 <- as.matrix(tdm_letras_c2)
+dtm_letras_c2 <- DocumentTermMatrix(corpus_letras_limpio_c2, control = list(minWordLength = 3, stopwords = FALSE))
+inspect(dtm_letras_c2)
+```
+
+Acá es donde ya no entiendo bien que debería esperar que salga, hay términos que no procesa bien y eso me complica
+
+```{r}
+corpus_letras_stem_c2 <- tm_map(corpus_letras_limpio_c2, stemDocument)
+corpus_letras_stem_c2 <- tm_map(corpus_letras_stem_c2, stemCompletion, dictionary = corpus_letras_limpio_c2)
+inspect(corpus_letras_stem_c2[1:5])
+```
+
+Creo que esto es lo que mejor salió hasta ahora, buscar asociaciones de palabras. 
+
+```{r}
+terms10 <- findFreqTerms(dtm_letras_c2, lowfreq = 10)
+findAssocs(dtm_letras_c2, terms10 , 0.4)
+```
+
+```{r}
+terms20 <- findFreqTerms(dtm_letras_c2, lowfreq=20)
+```
+
+Como no tenía una función de diccionario a mano me traje una. 
+
+```{r}
+Dictionary <- function(x) {
+    if( is.character(x) ) {
+        return (x)
+    }
+    stop('x is not a character vector')
+}
+```
+
+Con los datos del DTM armo el diccionario
+
+```{r}
+dict_letras  <- Dictionary(findFreqTerms(dtm_letras_c2, 5))
+head(dict_letras)
+```
+
+Como te había dicho con el wordcloud puedo ver los términos en general, a ojo se ve que los "positivos" son más que los "negativos".
+
+```{r}
+wordcloud(corpus_letras_limpio_c2, min.freq = 50, random.order = FALSE)
+```
+
+De acá en adelante no funciona nada pero lo dejo por las dudas
+
+Intento de análisis de sentimiento
+
+```{r}
+clasif_emo_letras <- classify_emotion(df_letras$text, algorithm = "bayes", prior = 1.0)
+```
+
+```{r}
+emocion <- clasif_emo_letras[,7]
+emocion[is.na(emocion)] <- "unknown"
+table(emocion, useNA = "ifany")
+
+```
+
+Intento catalogar por polarización
+
+```{r}
+pol_letras <- classify_polarity(df_letras$text, algorithm = "bayes")
+```
+
+Qué quiero hacer
+
+Posible de hacer con las herramientas actuales (más o menos)
+
+- Detectar a quienes hace referencia cada canción. Quiero que por cada línea tenga otra con las referencias.
+- En base a eso armar el mapa de relaciones. Asumo que la inmensa mayoría de las referencias a otras hinchadas/clubes son negativas (hay excepciones igual) así que hasta acá puedo avanzar sin meterme con la captura de sentido. Para hacerlo con regex o clasificación simple (ejemplo: al inicio no se si "acade" se refiere a Racing pero al levantar las asociaciones debería salir)
+
+Necesito ayuda
+
+- Captura de sentido. Aunque sea en los términos de positivo/negativo. Pero si es posible para orientarlo a lo que era el problema principal de ver la construcción del yo o del otro.
+
