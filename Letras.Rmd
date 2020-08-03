@@ -1,0 +1,163 @@
+---
+title: "Letras"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(stringi)
+```
+
+
+Como ya lo tenía en un archivo levanto el scrap de ahí.
+
+```{r}
+df_letras <- read.csv("letrasbarras.csv", sep = ";", stringsAsFactors = FALSE)
+```
+
+
+Limpio las letras en letralimpia
+
+
+```{r}
+df_letras$letralimpia <- str_replace_all(df_letras$Letra, "(\\w)(\\1{2,})", "\\1")
+df_letras$letralimpia <- str_replace_all(df_letras$letralimpia, "[^a-z,á,é,í,ó,ú,ñ,0-9\\s]", "")
+df_letras$letralimpia <- str_replace_all(df_letras$letralimpia, "  ", " ")
+
+```
+
+Creo una columna "clubbarra" con el nombre del club y la barra. Esto por que después voy a usar estos (tokenizado) para buscarlo en las letras. Como no voy a usar (por ahora) el resto de las columnas me quedo solamente con esas dos para hacer la asociación.
+
+```{r}
+df_letras <- df_letras %>% mutate(clubbarra = paste0(Club, " ", Barra)) %>% select(letralimpia, clubbarra)
+
+```
+
+Ahora voy a agrupar todas las letras por club/barra y contar cuantas hay por cada uno.
+
+```{r}
+df_comp <- df_letras %>% drop_na() %>%  group_by(clubbarra) %>% summarize(cantidad = n(), letras = str_c(letralimpia, collapse = " "))
+```
+
+
+Tokenizar tanto los nombres como las letras
+
+```{r}
+armar_tokens <- function(string1){
+    temp <- stringr::str_split(string1, " ")
+    temp <- lapply(temp, unique)
+    return(temp)
+}
+
+df_comp$tokens_letra <- armar_tokens(df_comp$letras)
+df_comp$tokens_nombre <- armar_tokens(df_comp$clubbarra)
+```
+
+
+Elimino los tokens duplicados. Si bien la información de cuanto se repite cada uno es valiosa en este caso nos vamos a quedar solamente con las referencias, no con la intensidad.
+
+```{r}
+sacar_dups <- function(string1){
+    temp <- string1[!stri_duplicated(string1)]
+    return(temp)
+}
+
+df_comp$tokens_letra <- lapply(df_comp$tokens_letra, sacar_dups)
+df_comp$tokens_nombre <- lapply(df_comp$tokens_nombre, sacar_dups)
+```
+
+Los tokens que tienen menos de ??? (cinco, cuatro, tres) letras se van a eliminar también. 
+
+```{r}
+sacar_cortos <- function(string1){
+    temp <- string1[stri_length(string1)>=3]
+    return(temp)
+}
+
+df_comp$tokens_letra <- lapply(df_comp$tokens_letra, sacar_cortos)
+df_comp$tokens_nombre <- lapply(df_comp$tokens_nombre, sacar_cortos)
+
+```
+
+Tomamos todos los tokens de nombres y los colapsamos en una lista.
+
+```{r}
+listanombres <- unlist(df_comp$tokens_nombre)
+```
+
+Convertimos esa lista en un data frame y vemos cuántos nombres repetidos hay
+
+```{r}
+df_nombres <- listanombres %>% as_tibble() %>% count(value) %>% arrange(desc(n))
+head(df_nombres)
+```
+
+Sacamos los que ocurren más de cinco veces. La idea es no complicar el análisis.
+
+```{r}
+df_nombres <- df_nombres %>% filter(n<=5)
+```
+
+Reconstruimos la lista de nombres.
+
+```{r}
+listanombres <- df_nombres$value
+```
+
+Cruzamos la lista de tokens de las canciones contra la de nombres de clubes y barras a ver que coincide. Sería esperable que cada club coincidiera con las propias como mínimo.
+
+```{r}
+match_token <- function(string1){
+ 
+    temp <- listanombres[listanombres %in% unlist(string1)]
+    return(temp)
+}
+
+df_comp$tokens_matcheados <- lapply(df_comp$tokens_letra, match_token)
+
+```
+
+Vemos cuántos se refieren a sí mismos (match por nombre)
+
+```{r}
+comp_tokens_iguales <- function(string1, string2)
+  
+{
+    temp <- string1[string1 %in% string2]
+    return(temp)
+}
+
+df_comp$tokens_propios <- mapply(comp_tokens_iguales, df_comp$tokens_nombre, df_comp$tokens_matcheados)
+
+```
+
+Y los diferentes
+
+```{r}
+comp_tokens_distintos <- function(string1, string2)
+  
+{
+    temp <- setdiff(string1, string2)
+    return(temp)
+}
+
+df_comp$tokens_ajenos <- mapply(comp_tokens_distintos, df_comp$tokens_matcheados, df_comp$tokens_nombre)
+
+```
+
+Como sigue
+
+Hasta acá es una demo para mostrar el concepto básico. Por lo menos y considerando todas las limitaciones del caso se pueden leer las canciones, sacar tokens (en el sentido de un token por palabra de x o más caracteres) y mediante comparación sacar tanto semejanzas (la columna de propios) y diferencias (la de ajenos) para identificar a grandes rasgos como se estructuran las referencias explícitas.
+
+Creo que el próximo frente de avance podría ser elaborar un poco mejor la tokenización y empezar a incluir o tokens con más de una palabra o estructuras que permitan conservar la relación entre los mismos (ej, no es lo mismo "San" "Martín" por separado que "San Martín", y esto mismo probablemente sea una referencia al club Chacarita). Una vez organizado bien este tema ahí si se puede proceder a la agrupación y clasificación más compleja. 
+
+Hay mucha información en cuanto a que dice cada canción (en algunos casos cuentan relatos bastante complejos). Por ahora sigo trabajando a nivel de club completo, por eso el paste a todo lo que se dice en las canciones. En general la idea sería usar esta compilación para realizar un análisis general, extraer los conceptos más amplios (como las relaciones descritas anteriormente) y una vez establecido esto sí volver a las canciones individuales para recuperar las referencias ahí.
+
+Por ahora no estoy haciendo nada de captura de sentido. No obstante una vez establecido quien habla de quien (que sería lo que intento captar ahora) pienso que se podría configurar un conjunto de conceptualizaciones y trabajarlas de forma similar ya que no parecen ser tantas.
+
+
+
